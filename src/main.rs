@@ -1,5 +1,4 @@
 extern crate piston_window;
-extern crate rand;
 extern crate opengl_graphics;
 extern crate piston;
 extern crate image;
@@ -7,7 +6,6 @@ extern crate image;
 extern crate clap;
 
 use clap::{App, Arg, Error};
-use rand::distributions::{IndependentSample, Range};
 use piston_window::*;
 use opengl_graphics::{ OpenGL };
 use std::path::Path;
@@ -42,13 +40,13 @@ impl World {
 
 struct Grid {
     size: Vector,
-    tiles: Vec<[u8; 4]>
+    tiles: Vec<usize>
 }
 
 impl Grid {
     fn new(width: usize, height: usize) -> Grid {
         return Grid {
-            tiles: vec![[255; 4]; width * height],
+            tiles: vec![0; width * height],
             size: Vector {
                 x: width,
                 y: height
@@ -56,13 +54,13 @@ impl Grid {
         }
     }
 
-    fn set(&mut self, position: &mut IVector, value: [u8; 4]) {
+    fn set(&mut self, position: &mut IVector, value: usize) {
         self.bound_position(position);
 
         self.tiles[self.size.x * position.y as usize + position.x as usize] = value;
     }
 
-    fn get(&self, position: &mut IVector) -> [u8; 4] {
+    fn get(&self, position: &mut IVector) -> usize {
         self.bound_position(position);
 
         return self.tiles[self.size.x * position.y as usize + position.x as usize];
@@ -105,49 +103,46 @@ struct Vector {
 }
 
 struct Ant {
-    color: [u8; 4],
     position: IVector,
     direction: usize
 }
 
 impl Ant {
-    fn new(grid_size: &Vector) -> Ant {
-        let mut rng = rand::thread_rng();
-        let range = Range::new(0, 256);
-        let x_range = Range::new(0, grid_size.x);
-        let y_range = Range::new(0, grid_size.y);
-
+    fn new(grid_size: &Vector, direction: usize) -> Ant {
         return Ant {
-            color: [range.ind_sample(&mut rng) as u8, range.ind_sample(&mut rng) as u8, range.ind_sample(&mut rng) as u8, 255],
             position: IVector {
-                x: x_range.ind_sample(&mut rng) as isize,
-                y: y_range.ind_sample(&mut rng) as isize
+                x: (grid_size.x / 2) as isize,
+                y: (grid_size.y / 2) as isize
             },
-            direction: 3
+            direction: direction
         }
     }
 
     fn update(&mut self, world: &mut Grid) {
         static DIRECTIONS: [[isize; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
-        let color = world.get(&mut self.position);
+        let code = world.get(&mut self.position);
 
-        if color[0] == 255 && color[1] == 255 && color[2] == 255 {
+        if get_direction(code) {
             self.direction += 1;
             self.direction %= 4;
-            world.set(&mut self.position, self.color)
+            
         } else {
             self.direction += 3;
             self.direction %= 4;
-            world.set(&mut self.position, [255; 4])
         }
 
+        if code == 15 {
+            world.set(&mut self.position, 0);
+        } else {
+            world.set(&mut self.position, code + 1);
+        }
+        
         self.position.add(DIRECTIONS[self.direction]);
     }
 }
 
 struct Application {
     world: World,
-    ants: usize,
     speed: usize,
     zoom: f64,
 }
@@ -178,7 +173,7 @@ impl Application {
                     let x = index % self.world.grid.size.x;
                     let y = index / self.world.grid.size.x;
                 
-                    canvas.put_pixel(x as u32, y as u32, Rgba(*tile));
+                    canvas.put_pixel(x as u32, y as u32, Rgba(get_color(*tile)));
                 }
 
                 texture.update(&mut window.encoder, &canvas).unwrap();
@@ -212,7 +207,7 @@ impl Application {
 
                 for i in 0..self.zoom as u32 {
                     for j in 0..self.zoom as u32 {
-                        canvas.put_pixel((x as u32 * self.zoom as u32) + i, (y as u32 * self.zoom as u32) + j, image::Rgba(*tile));
+                        canvas.put_pixel((x as u32 * self.zoom as u32) + i, (y as u32 * self.zoom as u32) + j, Rgba(get_color(*tile)));
                     }
                 }
             }
@@ -226,11 +221,24 @@ impl Application {
     }
 
     fn add_ants(&mut self) {
-        for _ in 0..self.ants {
-            let ant = Ant::new(&self.world.grid.size);
+        for i in 0..4 {
+            let ant = Ant::new(&self.world.grid.size, i);
             self.world.add_ant(ant);
         }
     }
+}
+
+fn get_color(code: usize) -> [u8; 4] {
+    const COLORS: [[u8; 4]; 16] = [[255, 255, 255, 255], [255, 61, 61, 255], [255, 193, 61, 255], [225, 255, 61, 255],
+                                    [148, 255, 61, 255], [61, 255, 103, 255], [61, 255, 225, 255], [61, 190, 255, 255],
+                                    [61, 86, 255, 255], [141, 61, 255, 255], [229, 61, 255, 255], [255, 61, 151, 255],
+                                    [26, 117, 78, 255], [79, 91, 78, 255], [99, 74, 58, 255], [0, 0, 0, 255]];
+    return COLORS[code];
+}
+
+fn get_direction(code: usize) -> bool {
+    const DIRECTIONS: [bool; 16] = [false, true, false, true, false, false, true, true, false, true, false, true, false, false, true, true];
+    return DIRECTIONS[code];
 }
 
 fn main() {
@@ -265,13 +273,6 @@ fn main() {
             .help("Iterations per update")
             .default_value("20")
             .takes_value(true))
-        .arg(Arg::with_name("ants")
-            .short("a")
-            .long("ants")
-            .value_name("INTEGER")
-            .help("Number of ants")
-            .default_value("5")
-            .takes_value(true))
         .arg(Arg::with_name("cycles")
             .short("c")
             .long("cycles")
@@ -291,14 +292,12 @@ fn main() {
     // Parse arguments
     let width = value_t_or_exit!(matches.value_of("width"), usize);
     let height = value_t_or_exit!(matches.value_of("height"), usize);
-    let ants = value_t_or_exit!(matches.value_of("ants"), usize);
     let speed = value_t_or_exit!(matches.value_of("speed"), usize);
     let cycles = value_t_or_exit!(matches.value_of("cycles"), usize);
     let zoom = value_t_or_exit!(matches.value_of("zoom"), usize);
 
     let mut app = Application {
         world: World::new(width, height),
-        ants: ants,
         speed: speed,
         zoom: zoom as f64
     };
